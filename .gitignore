@@ -1,0 +1,11 @@
+.obsidian/
+scanner/reports/
+reports/raw/
+reports/normalized/
+reports/final/
+reports/*.html
+reports/*.json
+reports/*.yaml
+.env
+__pycache__/
+*.pyc

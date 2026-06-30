@@ -1,0 +1,21 @@
+scan:
+  mode: baseline
+  target_url: https://example.com
+  openapi_target: ""
+  zap_max_duration: 1
+
+gate:
+  fail_on: none
+
+auth:
+  enabled: false
+  headers:
+    Authorization: ""
+    X-API-Key: ""
+    X-CSRF-Token: ""
+  cookie: ""
+
+output:
+  raw_dir: reports/raw
+  normalized_dir: reports/normalized
+  final_dir: reports/final

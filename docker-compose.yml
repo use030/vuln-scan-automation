@@ -1,0 +1,136 @@
+﻿services:
+  zap:
+    image: ghcr.io/zaproxy/zaproxy:stable
+    environment:
+      SCAN_MODE: ${SCAN_MODE:-baseline}
+      TARGET_URL: ${TARGET_URL:-https://example.com}
+      OPENAPI_TARGET: ${OPENAPI_TARGET:-}
+      OPENAPI_FILE: ${OPENAPI_FILE:-openapi.json}
+      ZAP_MAX_DURATION: ${ZAP_MAX_DURATION:-1}
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      AUTH_HEADER_1_NAME: ${AUTH_HEADER_1_NAME:-}
+      AUTH_HEADER_1_VALUE: ${AUTH_HEADER_1_VALUE:-}
+      AUTH_HEADER_2_NAME: ${AUTH_HEADER_2_NAME:-}
+      AUTH_HEADER_2_VALUE: ${AUTH_HEADER_2_VALUE:-}
+      AUTH_HEADER_3_NAME: ${AUTH_HEADER_3_NAME:-}
+      AUTH_HEADER_3_VALUE: ${AUTH_HEADER_3_VALUE:-}
+      AUTH_COOKIE: ${AUTH_COOKIE:-}
+    volumes:
+      - type: bind
+        source: ${OUTPUT_DIR:-./reports}/raw
+        target: /zap/wrk
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${OPENAPI_DIR:-./openapi}
+        target: /zap/openapi
+        read_only: true
+        bind:
+          create_host_path: true
+    command:
+      - sh
+      - -c
+      - |
+        echo "Running ZAP scan. Mode: $$SCAN_MODE"
+        zap_options=""
+        replacer_index=0
+        report_html="zap-report.html"
+        report_json="zap-report.json"
+
+        add_replacer_header() {
+          header_name="$$1"
+          header_value="$$2"
+          description="$$3"
+
+          if [ -z "$$header_name" ] || [ -z "$$header_value" ]; then
+            return
+          fi
+
+          zap_options="$$zap_options -config replacer.full_list($$replacer_index).description=$$description"
+          zap_options="$$zap_options -config replacer.full_list($$replacer_index).enabled=true"
+          zap_options="$$zap_options -config replacer.full_list($$replacer_index).matchtype=REQ_HEADER"
+          zap_options="$$zap_options -config replacer.full_list($$replacer_index).matchstr=$$header_name"
+          zap_options="$$zap_options -config replacer.full_list($$replacer_index).regex=false"
+          zap_options="$$zap_options -config replacer.full_list($$replacer_index).replacement='$$header_value'"
+          replacer_index=$$((replacer_index + 1))
+        }
+
+        if [ "$$AUTH_ENABLED" = "true" ]; then
+          add_replacer_header "$$AUTH_HEADER_1_NAME" "$$AUTH_HEADER_1_VALUE" "auth-header-1"
+          add_replacer_header "$$AUTH_HEADER_2_NAME" "$$AUTH_HEADER_2_VALUE" "auth-header-2"
+          add_replacer_header "$$AUTH_HEADER_3_NAME" "$$AUTH_HEADER_3_VALUE" "auth-header-3"
+          add_replacer_header "Cookie" "$$AUTH_COOKIE" "auth-cookie"
+          echo "Authenticated scan mode enabled. Header values are not printed."
+        fi
+
+        run_zap() {
+          if [ -n "$$zap_options" ]; then
+            "$$@" -z "$$zap_options"
+          else
+            "$$@"
+          fi
+        }
+
+        if [ "$$SCAN_MODE" = "openapi" ]; then
+          if [ -z "$$OPENAPI_TARGET" ]; then
+            OPENAPI_TARGET="/zap/openapi/$$OPENAPI_FILE"
+            echo "OPENAPI_TARGET is empty. Using local OpenAPI file: $$OPENAPI_TARGET"
+          fi
+
+          case "$$OPENAPI_TARGET" in
+            http://*|https://*) ;;
+            *)
+              if [ ! -f "$$OPENAPI_TARGET" ]; then
+                echo "OpenAPI file not found: $$OPENAPI_TARGET"
+                echo "Set OPENAPI_DIR and OPENAPI_FILE, or provide OPENAPI_TARGET as a URL/path."
+                exit 3
+              fi
+              ;;
+          esac
+
+          echo "Running ZAP API scan for OpenAPI target: $$OPENAPI_TARGET"
+          run_zap zap-api-scan.py \
+            -t "$$OPENAPI_TARGET" \
+            -f openapi \
+            -r "$$report_html" \
+            -J "$$report_json"
+        elif [ "$$SCAN_MODE" = "baseline" ]; then
+          echo "Running ZAP baseline scan for target: $$TARGET_URL"
+          run_zap zap-baseline.py \
+            -t "$$TARGET_URL" \
+            -m "$$ZAP_MAX_DURATION" \
+            -r "$$report_html" \
+            -J "$$report_json"
+        else
+          echo "Unsupported SCAN_MODE: $$SCAN_MODE"
+          echo "Supported values: baseline, openapi"
+          exit 3
+        fi
+        code=$$?
+        if [ -f "/zap/wrk/$$report_json" ]; then
+          echo "ZAP report generated. Original ZAP exit code: $$code"
+          exit 0
+        fi
+        exit $$code
+
+  reporter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 동기적 실행 
+    depends_on:
+      zap:
+        condition: service_completed_successfully
+    environment:
+      SCAN_MODE: ${SCAN_MODE:-baseline}
+      TARGET_URL: ${TARGET_URL:-https://example.com}
+      REPORT_DIR: /work/reports
+      RAW_REPORT_PATH: /work/reports/raw/zap-report.json
+      FAIL_ON: ${FAIL_ON:-none}
+    volumes:
+      - type: bind
+        source: ${OUTPUT_DIR:-./reports}
+        target: /work/reports
+        bind:
+          create_host_path: true
+

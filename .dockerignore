@@ -1,0 +1,7 @@
+.git
+.gitignore
+reports
+scanner/reports
+__pycache__
+*.pyc
+.env
